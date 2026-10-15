@@ -1,0 +1,182 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ESP32 PAGASA Rain Monitor</title>
+<style>
+*{box-sizing:border-box;}
+body{font-family:Arial,sans-serif;margin:0;padding:12px;background:#eef2f3;text-align:center;}
+.header{background:#263238;color:white;padding:18px;border-radius:15px;margin-bottom:12px;}
+.header h1{margin:0;font-size:25px;}
+.header p{margin:7px 0 0;font-size:13px;}
+.status{color:white;padding:20px 8px;border-radius:15px;font-size:27px;font-weight:bold;margin-bottom:12px;}
+.card{background:white;padding:17px;margin:10px auto;border-radius:15px;max-width:480px;box-shadow:0 3px 10px rgba(0,0,0,.15);}
+.label{font-size:14px;color:#666;}
+.value{font-size:32px;font-weight:bold;margin-top:6px;}
+.classification{color:white;padding:16px;border-radius:12px;font-size:24px;font-weight:bold;margin-top:8px;}
+.countdown{font-size:30px;font-weight:bold;color:#1565c0;}
+.activity{font-size:21px;font-weight:bold;color:#333;}
+.info{font-size:13px;color:#666;line-height:1.5;}
+.footer{font-size:11px;color:#777;margin:15px;}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>ESP32 RAIN MONITOR</h1>
+  <p>PAGASA-INSPIRED LOCAL RAINFALL MONITORING</p>
+</div>
+
+<div id="status" class="status" style="background:#43a047">NORMAL</div>
+
+<div class="card">
+  <div class="label">RAINFALL CLASSIFICATION</div>
+  <div id="classification" class="classification" style="background:#66bb6a">LIGHT RAIN</div>
+</div>
+
+<div class="card">
+  <div class="label">CURRENT RAIN ACTIVITY</div>
+  <div id="activity" class="activity">WAITING FOR RAIN</div>
+</div>
+
+<div class="card">
+  <div class="label">RAIN DURATION</div>
+  <div id="duration" class="value">0 sec</div>
+</div>
+
+<div class="card">
+  <div class="label">RAINFALL INTENSITY</div>
+  <div id="intensity" class="value">0.00 mm/hr</div>
+</div>
+
+<div class="card">
+  <div class="label">TOTAL RAINFALL</div>
+  <div id="rain" class="value">0.00 mm</div>
+</div>
+
+<div class="card">
+  <div class="label">TIPPING BUCKET COUNT</div>
+  <div id="tips" class="value">0</div>
+</div>
+
+<div class="card">
+  <div class="label">NO-RAIN RESET COUNTDOWN</div>
+  <div class="countdown"><span id="countdown">60</span></div>
+  <p>Every new bucket tip restarts the timer.</p>
+</div>
+
+<div class="card">
+  <div class="label">RAINFALL GUIDE</div>
+  <div class="info">
+    0-100 tips = Light Rain<br>
+    101-150 tips = Moderate Rain<br>
+    151-200 tips = Heavy Rain<br>
+    201+ tips = Intense Heavy Rain
+  </div>
+</div>
+
+<div class="card">
+  <div class="info">
+    Device: <span id="device">--</span><br>
+    WiFi Signal: <span id="rssi">--</span><br>
+    Last Update: <span id="lastUpdate">waiting for data...</span>
+  </div>
+</div>
+
+<div class="footer">Local sensor monitoring system - PAGASA-inspired</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+// ============================================================
+// SUPABASE SETTINGS  (Settings -> API in your Supabase project)
+// Use the ANON key only. Never put the service_role key here.
+// ============================================================
+const SUPABASE_URL  = "https://YOUR_PROJECT.supabase.co";
+const SUPABASE_KEY  = "YOUR_ANON_KEY";
+const DEVICE_ID     = "RAIN001";
+
+// Same local thresholds as the ESP32 sketch
+const ALERT_INTERVAL = 200;
+const FLOOD_RISK_TIPS = 600;
+
+const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+let latest = null;       // newest row from Supabase
+let receivedAt = 0;      // when this browser received it (for the countdown)
+
+function rainClass(tips){
+  if (tips > 200) return {text:"INTENSE HEAVY RAIN", color:"#8e24aa"};
+  if (tips > 150) return {text:"HEAVY RAIN",         color:"#e53935"};
+  if (tips > 100) return {text:"MODERATE RAIN",      color:"#fbc02d"};
+  return               {text:"LIGHT RAIN",           color:"#66bb6a"};
+}
+
+function floodStatus(tips){
+  if (tips >= FLOOD_RISK_TIPS) return {text:"RISK OF FLOOD", color:"#e53935"};
+  if (tips >= ALERT_INTERVAL)  return {text:"RAIN ALERT",    color:"#fbc02d"};
+  return                              {text:"NORMAL",        color:"#43a047"};
+}
+
+function render(){
+  if (!latest) return;
+
+  const tips = latest.tip_count;
+  const rc = rainClass(tips);
+  const fs = floodStatus(tips);
+
+  document.getElementById('status').innerHTML = fs.text;
+  document.getElementById('status').style.background = fs.color;
+
+  document.getElementById('classification').innerHTML = rc.text;
+  document.getElementById('classification').style.background = rc.color;
+
+  document.getElementById('tips').innerHTML = tips;
+  document.getElementById('rain').innerHTML = latest.rainfall_mm.toFixed(2) + ' mm';
+  document.getElementById('intensity').innerHTML = latest.rainfall_intensity.toFixed(2) + ' mm/hr';
+  document.getElementById('activity').innerHTML = latest.rain_activity || 'WAITING FOR RAIN';
+  document.getElementById('duration').innerHTML = (latest.rain_duration_seconds || 0) + ' sec';
+
+  // Countdown ticks down locally between updates while rain is detected
+  let cd = latest.no_rain_countdown;
+  if (latest.rain_activity === 'RAIN DETECTED') {
+    const elapsed = Math.floor((Date.now() - receivedAt) / 1000);
+    cd = Math.max(0, cd - elapsed);
+  }
+  document.getElementById('countdown').innerHTML = cd + ' SEC';
+
+  document.getElementById('device').innerHTML = latest.device_id;
+  document.getElementById('rssi').innerHTML = latest.wifi_rssi + ' dBm';
+  document.getElementById('lastUpdate').innerHTML =
+    new Date(latest.created_at).toLocaleTimeString();
+}
+
+function setLatest(row){
+  latest = row;
+  receivedAt = Date.now();
+  render();
+}
+
+// 1) Load the newest reading when the page opens
+db.from('rain_readings')
+  .select('*')
+  .eq('device_id', DEVICE_ID)
+  .order('created_at', { ascending: false })
+  .limit(1)
+  .then(({ data, error }) => {
+    if (error) { console.error(error); return; }
+    if (data && data[0]) setLatest(data[0]);
+  });
+
+// 2) Live updates: Supabase pushes each new row the moment the ESP32 inserts it
+db.channel('rain-live')
+  .on('postgres_changes',
+      { event: 'INSERT', schema: 'public', table: 'rain_readings',
+        filter: 'device_id=eq.' + DEVICE_ID },
+      payload => setLatest(payload.new))
+  .subscribe();
+
+// 3) Refresh the screen every second (keeps the countdown moving, like the original)
+setInterval(render, 1000);
+</script>
+</body>
+</html>
