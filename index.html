@@ -60,9 +60,32 @@ body{font-family:Arial,sans-serif;margin:0;padding:12px;background:#eef2f3;text-
 </div>
 
 <div class="card">
+  <div class="label">WATER LEVEL</div>
+  <div id="water" class="value">-- cm</div>
+</div>
+
+<div class="card">
   <div class="label">NO-RAIN RESET COUNTDOWN</div>
   <div class="countdown"><span id="countdown">60</span></div>
   <p>Every new bucket tip restarts the timer.</p>
+</div>
+
+<div class="card">
+  <div class="label">TOMORROW'S RAIN FORECAST</div>
+  <div id="fc-class" class="classification" style="background:#9e9e9e">LOADING...</div>
+  <div id="fc-detail" class="info" style="margin-top:8px">Fetching forecast...</div>
+</div>
+
+<div class="card">
+  <div class="label">FLOOD OUTLOOK</div>
+  <div id="flood-class" class="classification" style="background:#9e9e9e">--</div>
+  <div id="flood-detail" class="info" style="margin-top:8px">Waiting for forecast...</div>
+</div>
+
+<div class="card">
+  <div class="label">WATER LEVEL TREND</div>
+  <div id="trend" class="value">--</div>
+  <div id="trend-detail" class="info">Collecting data...</div>
 </div>
 
 <div class="card">
@@ -91,13 +114,15 @@ body{font-family:Arial,sans-serif;margin:0;padding:12px;background:#eef2f3;text-
 // SUPABASE SETTINGS  (Settings -> API in your Supabase project)
 // Use the ANON key only. Never put the service_role key here.
 // ============================================================
-const SUPABASE_URL  = "https://zyzcllhenxikblfldael.supabase.co";
-const SUPABASE_KEY  = "sb_publishable_WGrYt8gdleNt5HgqvxU_tw_HPpayowK";
+const SUPABASE_URL  = "https://YOUR_PROJECT.supabase.co";
+const SUPABASE_KEY  = "YOUR_ANON_KEY";
 const DEVICE_ID     = "RAIN001";
 
 // Same local thresholds as the ESP32 sketch
 const ALERT_INTERVAL = 200;
 const FLOOD_RISK_TIPS = 600;
+const WATER_ALERT_CM = 30;   // keep the same as the ESP32 sketch
+const WATER_FLOOD_CM = 60;
 
 const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
@@ -111,10 +136,11 @@ function rainClass(tips){
   return               {text:"LIGHT RAIN",           color:"#66bb6a"};
 }
 
-function floodStatus(tips){
-  if (tips >= FLOOD_RISK_TIPS) return {text:"RISK OF FLOOD", color:"#e53935"};
-  if (tips >= ALERT_INTERVAL)  return {text:"RAIN ALERT",    color:"#fbc02d"};
-  return                              {text:"NORMAL",        color:"#43a047"};
+function floodStatus(tips, water){
+  const w = (water === null || water === undefined) ? 0 : water;
+  if (tips >= FLOOD_RISK_TIPS || w >= WATER_FLOOD_CM) return {text:"RISK OF FLOOD", color:"#e53935"};
+  if (tips >= ALERT_INTERVAL  || w >= WATER_ALERT_CM) return {text:"RAIN ALERT",    color:"#fbc02d"};
+  return                                                     {text:"NORMAL",        color:"#43a047"};
 }
 
 function render(){
@@ -122,7 +148,7 @@ function render(){
 
   const tips = latest.tip_count;
   const rc = rainClass(tips);
-  const fs = floodStatus(tips);
+  const fs = floodStatus(tips, latest.water_level_cm);
 
   document.getElementById('status').innerHTML = fs.text;
   document.getElementById('status').style.background = fs.color;
@@ -131,16 +157,24 @@ function render(){
   document.getElementById('classification').style.background = rc.color;
 
   document.getElementById('tips').innerHTML = tips;
+  document.getElementById('water').innerHTML =
+    (latest.water_level_cm == null) ? '-- cm' : latest.water_level_cm.toFixed(1) + ' cm';
   document.getElementById('rain').innerHTML = latest.rainfall_mm.toFixed(2) + ' mm';
   document.getElementById('intensity').innerHTML = latest.rainfall_intensity.toFixed(2) + ' mm/hr';
   document.getElementById('activity').innerHTML = latest.rain_activity || 'WAITING FOR RAIN';
-  document.getElementById('duration').innerHTML = (latest.rain_duration_seconds || 0) + ' sec';
 
-  // Countdown ticks down locally between updates while rain is detected
+  // Seconds since the ESP32 sent this reading (uses the saved timestamp,
+  // so a page refresh does not restart the countdown)
+  const age = Math.max(0, Math.floor((Date.now() - new Date(latest.created_at).getTime()) / 1000));
+  const raining = latest.rain_activity === 'RAIN DETECTED';
+
+  // Duration and countdown keep moving between uploads while rain is detected
+  const dur = (latest.rain_duration_seconds || 0) + (raining ? age : 0);
+  document.getElementById('duration').innerHTML = dur + ' sec';
+
   let cd = latest.no_rain_countdown;
-  if (latest.rain_activity === 'RAIN DETECTED') {
-    const elapsed = Math.floor((Date.now() - receivedAt) / 1000);
-    cd = Math.max(0, cd - elapsed);
+  if (raining) {
+    cd = Math.max(0, cd - age);
   }
   document.getElementById('countdown').innerHTML = cd + ' SEC';
 
@@ -148,6 +182,8 @@ function render(){
   document.getElementById('rssi').innerHTML = latest.wifi_rssi + ' dBm';
   document.getElementById('lastUpdate').innerHTML =
     new Date(latest.created_at).toLocaleTimeString();
+
+  renderForecast();
 }
 
 function setLatest(row){
@@ -174,6 +210,130 @@ db.channel('rain-live')
         filter: 'device_id=eq.' + DEVICE_ID },
       payload => setLatest(payload.new))
   .subscribe();
+
+// ============================================================
+// FORECAST (Open-Meteo, free, no key) + FLOOD OUTLOOK + WATER TREND
+// ============================================================
+const LAT = 14.5547;   // Makati City: change to your rain gauge location
+const LON = 121.0244;
+
+let forecast = null;
+
+async function loadForecast(){
+  try {
+    const url = "https://api.open-meteo.com/v1/forecast?latitude=" + LAT + "&longitude=" + LON +
+      "&daily=precipitation_sum,precipitation_probability_max&hourly=precipitation" +
+      "&timezone=Asia%2FManila&forecast_days=3";
+    const res = await fetch(url);
+    const d = await res.json();
+
+    const day = d.daily.time[1];   // index 0 = today, 1 = tomorrow
+    const chance = d.daily.precipitation_probability_max[1];
+    const mm = d.daily.precipitation_sum[1];
+    let maxHour = 0;
+    d.hourly.time.forEach((t, i) => {
+      if (t.startsWith(day)) maxHour = Math.max(maxHour, d.hourly.precipitation[i] || 0);
+    });
+
+    forecast = { chance: chance == null ? 0 : chance, mm: mm || 0, maxHour: maxHour };
+    renderForecast();
+  } catch (e) {
+    console.error(e);
+    document.getElementById('fc-detail').innerHTML = "Forecast unavailable right now.";
+  }
+}
+
+function renderForecast(){
+  if (!forecast) return;
+  const f = forecast;
+
+  let fc;
+  if (f.chance >= 60)      fc = {text:"RAIN LIKELY",        color:"#e53935"};
+  else if (f.chance >= 30) fc = {text:"RAIN POSSIBLE",      color:"#fbc02d"};
+  else                     fc = {text:"LOW CHANCE OF RAIN", color:"#66bb6a"};
+
+  document.getElementById('fc-class').innerHTML = fc.text;
+  document.getElementById('fc-class').style.background = fc.color;
+  document.getElementById('fc-detail').innerHTML =
+    "Chance: " + f.chance + "%<br>Expected: " + f.mm.toFixed(1) +
+    " mm<br>Heaviest hour: " + f.maxHour.toFixed(1) + " mm/hr";
+
+  // Local flood outlook: tomorrow's rain, raised if the water is already high
+  let lvl = 0;
+  if (f.mm >= 50 || f.maxHour >= 30) lvl = 2;
+  else if (f.mm >= 20 || f.maxHour >= 15) lvl = 1;
+
+  const wet = latest && latest.water_level_cm != null && latest.water_level_cm >= WATER_ALERT_CM;
+  if (wet && f.chance >= 50 && lvl < 1) lvl = 1;
+
+  const labels = ["LOW FLOOD RISK", "FLOOD WATCH", "HIGH FLOOD RISK"];
+  const colors = ["#66bb6a", "#fbc02d", "#e53935"];
+  document.getElementById('flood-class').innerHTML = labels[lvl];
+  document.getElementById('flood-class').style.background = colors[lvl];
+  document.getElementById('flood-detail').innerHTML =
+    (wet ? "Water level is already elevated.<br>" : "") +
+    "Local estimate from forecast rainfall, not an official PAGASA warning.";
+}
+
+// Water level trend: straight-line fit over the last 30 minutes
+async function loadTrend(){
+  const el = document.getElementById('trend');
+  const detail = document.getElementById('trend-detail');
+  try {
+    const since = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    const { data, error } = await db.from('rain_readings')
+      .select('created_at,water_level_cm')
+      .eq('device_id', DEVICE_ID)
+      .gte('created_at', since)
+      .not('water_level_cm', 'is', null)
+      .order('created_at', { ascending: true });
+
+    if (error || !data || data.length < 3) {
+      el.innerHTML = "--"; detail.innerHTML = "Collecting data..."; return;
+    }
+
+    const t0 = new Date(data[0].created_at).getTime();
+    const xs = data.map(r => (new Date(r.created_at).getTime() - t0) / 60000); // minutes
+    const ys = data.map(r => r.water_level_cm);
+
+    if (xs[xs.length - 1] < 5) {
+      el.innerHTML = "--"; detail.innerHTML = "Collecting data..."; return;
+    }
+
+    const n = xs.length;
+    const sx = xs.reduce((a, b) => a + b, 0);
+    const sy = ys.reduce((a, b) => a + b, 0);
+    const sxy = xs.reduce((a, x, i) => a + x * ys[i], 0);
+    const sxx = xs.reduce((a, x) => a + x * x, 0);
+    const slope = (n * sxy - sx * sy) / (n * sxx - sx * sx);   // cm per minute
+    const current = ys[ys.length - 1];
+
+    if (Math.abs(slope) < 0.1) {
+      el.innerHTML = "STEADY";
+      detail.innerHTML = "Water level is holding at " + current.toFixed(1) + " cm.";
+    } else if (slope > 0) {
+      el.innerHTML = "RISING";
+      let msg = "+" + slope.toFixed(2) + " cm/min.";
+      if (current < WATER_FLOOD_CM) {
+        const eta = (WATER_FLOOD_CM - current) / slope;
+        msg += eta <= 180
+          ? "<br>About " + Math.round(eta) + " min to reach " + WATER_FLOOD_CM + " cm at this rate."
+          : "<br>Flood level not expected soon at this rate.";
+      }
+      detail.innerHTML = msg;
+    } else {
+      el.innerHTML = "FALLING";
+      detail.innerHTML = slope.toFixed(2) + " cm/min.";
+    }
+  } catch (e) {
+    console.error(e);
+  }
+}
+
+loadForecast();
+setInterval(loadForecast, 30 * 60 * 1000);
+loadTrend();
+setInterval(loadTrend, 60 * 1000);
 
 // 3) Refresh the screen every second (keeps the countdown moving, like the original)
 setInterval(render, 1000);
