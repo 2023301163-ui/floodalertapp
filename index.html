@@ -1,284 +1,624 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#263238">
 <title>ESP32 PAGASA Rain Monitor</title>
 <style>
-*{box-sizing:border-box;}
-body{font-family:Arial,sans-serif;margin:0;padding:12px;background:#eef2f3;text-align:center;}
-.header{background:#263238;color:white;padding:18px;border-radius:15px;margin-bottom:12px;}
-.header h1{margin:0;font-size:25px;}
-.header p{margin:7px 0 0;font-size:13px;}
-.status{color:white;padding:20px 8px;border-radius:15px;font-size:27px;font-weight:bold;margin-bottom:12px;}
-.card{background:white;padding:17px;margin:10px auto;border-radius:15px;max-width:480px;box-shadow:0 3px 10px rgba(0,0,0,.15);}
-.label{font-size:14px;color:#666;}
-.value{font-size:32px;font-weight:bold;margin-top:6px;}
-.classification{color:white;padding:16px;border-radius:12px;font-size:24px;font-weight:bold;margin-top:8px;}
-.countdown{font-size:30px;font-weight:bold;color:#1565c0;}
-.activity{font-size:21px;font-weight:bold;color:#333;}
-.info{font-size:13px;color:#666;line-height:1.5;}
-.footer{font-size:11px;color:#777;margin:15px;}
+:root{
+  --bg:#eef2f3; --card:#ffffff; --text:#1f2933; --muted:#66707a; --line:#e3e8ec; --accent:#1565c0;
+  --yellow:#fbc02d; --orange:#fb8c00; --red:#e53935; --green:#43a047;
+  --radius:18px; --shadow:0 3px 12px rgba(0,0,0,.10);
+}
+@media (prefers-color-scheme: dark){
+  :root{ --bg:#0f1419; --card:#1a2128; --text:#e8edf1; --muted:#93a0ab; --line:#2a333c; --accent:#64b5f6; --shadow:0 3px 12px rgba(0,0,0,.45); }
+}
+*{box-sizing:border-box}
+[hidden]{display:none !important}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--text);
+  padding-bottom:calc(78px + env(safe-area-inset-bottom));}
+a{color:var(--accent)}
+
+/* ---------- top bar ---------- */
+.topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;max-width:640px;margin:0 auto;
+  padding:calc(12px + env(safe-area-inset-top)) 16px 10px}
+.brand b{font-size:16px}
+.brand small{display:block;color:var(--muted);font-size:11px;margin-top:1px}
+.sos-btn{display:none;background:var(--red);color:#fff;border:0;border-radius:999px;padding:10px 18px;font:inherit;font-weight:700;font-size:14px;cursor:pointer}
+
+main{max-width:640px;margin:0 auto}
+
+/* ---------- pages (tabs on mobile) ---------- */
+.page{display:none}
+.page.active{display:block}
+.page-title{margin:6px 16px 12px;font-size:20px}
+
+/* ---------- hero ---------- */
+.hero{position:relative;overflow:hidden;border-radius:24px;color:#fff;padding:20px 20px 18px;margin:4px 12px 14px;min-height:370px;
+  background:linear-gradient(160deg,#607d8b,#455a64);transition:background .6s}
+.hero[data-state="clear"]{background:linear-gradient(160deg,#4fc3f7,#0277bd)}
+.hero[data-state="rainy"]{background:linear-gradient(160deg,#6d8aa6,#34495e)}
+.hero[data-state="heavy"]{background:linear-gradient(160deg,#46558a,#1a2145)}
+.hero[data-state="flooding"]{background:linear-gradient(160deg,#ef5350,#8e1b1b)}
+.hero > :not(.hero-fx){position:relative}
+.hero.stale .hero-core{opacity:.6}
+.hero-fx{position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity .6s;
+  background-image:linear-gradient(105deg,transparent 0 47%,rgba(255,255,255,.55) 47% 51%,transparent 51% 100%);
+  background-size:22px 38px;animation:fall .7s linear infinite}
+.hero[data-state="rainy"] .hero-fx{opacity:.22}
+.hero[data-state="heavy"] .hero-fx,.hero[data-state="flooding"] .hero-fx{opacity:.4;animation-duration:.45s}
+@keyframes fall{to{background-position:0 38px}}
+@media (prefers-reduced-motion: reduce){.hero-fx{animation:none}}
+
+.hero-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.live{display:flex;align-items:center;gap:6px;font-size:12px}
+.live i{width:8px;height:8px;border-radius:50%;background:#76ff03;flex:0 0 8px}
+.live.stale i{background:#ffb300}
+.hero-icon{margin:22px 0 6px}
+.hero-icon svg{width:76px;height:76px;stroke:#fff;fill:none;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
+.hero h1{margin:0;font-size:clamp(38px,11vw,54px);line-height:1.05;font-weight:800;letter-spacing:-.5px}
+.hero-sub{margin:8px 0 0;font-size:15px;line-height:1.4;opacity:.95;max-width:34em}
+.hero-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:20px}
+.hero-stats div{background:rgba(255,255,255,.16);border-radius:14px;padding:10px 10px 9px}
+.hero-stats .k{color:#fff;opacity:.85;font-size:11px;display:block}
+.hero-stats b{display:block;font-size:17px;margin-top:3px}
+.hero-help{display:block;width:100%;margin-top:14px;background:#fff;color:#c62828;border:0;border-radius:14px;padding:13px;font:inherit;font-weight:800;font-size:15px;cursor:pointer}
+
+/* ---------- chips ---------- */
+.chip{display:inline-block;padding:5px 11px;border-radius:999px;font-size:12px;font-weight:700;letter-spacing:.4px;background:var(--line);color:var(--text)}
+.hero .chip{background:rgba(255,255,255,.22);color:#fff}
+.chip.lv0{background:var(--green);color:#fff}
+.chip.lv1{background:var(--yellow);color:#3a2e00}
+.chip.lv2{background:var(--orange);color:#fff}
+.chip.lv3{background:var(--red);color:#fff}
+
+/* ---------- cards ---------- */
+.notice{margin:0 12px 14px;padding:11px 14px;border-radius:12px;background:#fff3cd;color:#664d03;font-size:13px;line-height:1.4}
+.card{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px;margin:0 12px 14px}
+.card h2{margin:0;font-size:17px}
+.card-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:12px}
+.k{font-size:12px;color:var(--muted)}
+.muted{color:var(--muted)}
+.fine{font-size:11px;color:var(--muted);line-height:1.55;margin:10px 0 0}
+
+.window{display:flex;align-items:center;gap:10px;margin:2px 0 8px}
+.wcell{flex:1;text-align:center;padding:12px 6px;border-radius:14px;background:var(--bg)}
+.wcell b{display:block;font-size:24px;margin:3px 0 1px}
+.wcell small{color:var(--muted);font-size:12px;display:block;min-height:15px}
+.wline{flex:0 0 34px;height:2px;background:var(--line);position:relative}
+.wline::after{content:"";position:absolute;right:-2px;top:-4px;border-left:8px solid var(--line);border-top:5px solid transparent;border-bottom:5px solid transparent}
+.wsum{margin:0 0 6px;font-size:14px;color:var(--muted)}
+.rows .row{display:flex;justify-content:space-between;gap:14px;padding:10px 0;border-top:1px solid var(--line);font-size:14px}
+.rows .row span{color:var(--muted)}
+.rows .row b{text-align:right}
+
+.tiles{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:0 12px 14px}
+.tile{background:var(--card);border-radius:16px;box-shadow:var(--shadow);padding:14px}
+.tile b{display:block;font-size:20px;margin-top:5px}
+.tile b.sm{font-size:16px;margin-top:8px}
+
+.guide .g{display:flex;gap:12px;align-items:flex-start;padding:11px 0;border-top:1px solid var(--line)}
+.guide .dot{width:12px;height:12px;border-radius:50%;margin-top:4px;flex:0 0 12px}
+.guide b{display:block;font-size:14px}
+.guide span{display:block;font-size:13px;color:var(--muted);line-height:1.45;margin-top:2px}
+.credits{margin:6px 16px 20px}
+
+/* ---------- emergency page ---------- */
+.help-panel{background:var(--card);border-radius:var(--radius);box-shadow:var(--shadow);padding:18px;margin:0 12px 14px}
+.help-head{display:flex;align-items:center;justify-content:space-between}
+.help-head h2{margin:0;font-size:20px}
+.x{background:none;border:0;font-size:28px;line-height:1;color:var(--muted);cursor:pointer;padding:0 4px}
+.call-primary{display:block;text-align:center;background:var(--red);color:#fff;text-decoration:none;font-weight:800;font-size:18px;padding:16px;border-radius:14px;margin:14px 0 6px}
+.call-primary small{display:block;font-weight:500;font-size:12px;opacity:.9;margin-top:2px}
+.call-primary.off{background:var(--line);color:var(--muted);pointer-events:none}
+.nums .ph{display:inline-block;padding:9px 13px;border-radius:999px;border:1px dashed var(--muted);color:var(--muted);font-size:14px}
+.hl{padding:13px 0;border-top:1px solid var(--line)}
+.hl b{display:block;font-size:15px}
+.hl small{display:block;color:var(--muted);font-size:12px;margin:2px 0 9px}
+.nums{display:flex;flex-wrap:wrap;gap:8px}
+.nums a{display:inline-block;padding:9px 13px;border-radius:999px;border:1px solid var(--line);color:var(--accent);text-decoration:none;font-size:14px;font-weight:600}
+
+/* ---------- bottom tab bar (mobile) ---------- */
+.tabbar{position:fixed;left:0;right:0;bottom:0;z-index:20;display:flex;gap:4px;background:var(--card);border-top:1px solid var(--line);
+  padding:6px 8px calc(6px + env(safe-area-inset-bottom));box-shadow:0 -4px 14px rgba(0,0,0,.08)}
+.tab{flex:1;background:none;border:0;display:flex;flex-direction:column;align-items:center;gap:3px;padding:8px 4px;font:inherit;font-size:12px;color:var(--muted);cursor:pointer;border-radius:12px}
+.tab svg{width:24px;height:24px;stroke:currentColor;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+.tab.active{color:var(--accent);font-weight:700}
+.tab.sos{color:var(--red)}
+.tab.sos.active{background:rgba(229,57,53,.12);color:var(--red)}
+
+/* ---------- desktop: no tabs, everything on one page ---------- */
+@media (min-width: 900px){
+  body{padding-bottom:28px}
+  .topbar{max-width:1100px;padding:22px 24px 14px}
+  .brand b{font-size:20px}
+  .sos-btn{display:inline-block}
+  .tabbar,.page-title{display:none}
+  main{max-width:1100px;padding:0 24px;display:grid;grid-template-columns:repeat(12,1fr);gap:20px;align-items:start}
+  #page-home,#page-info{display:contents}
+  .hero,.card,.tiles,.notice,.credits{margin:0}
+  .hero{grid-column:1/-1;min-height:300px;padding:30px 34px}
+  .hero-icon{margin-top:26px}
+  .hero-stats{max-width:560px}
+  .hero-help{max-width:560px}
+  .notice{grid-column:1/-1}
+  .predict{grid-column:span 7}
+  .tiles{grid-column:span 5}
+  .guide{grid-column:span 7}
+  .credits{grid-column:span 5;padding-top:6px}
+  #page-help{display:none}
+  body.help-open #page-help{display:flex;position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.55);align-items:center;justify-content:center;padding:20px}
+  .help-panel{margin:0;width:100%;max-width:520px;max-height:88vh;overflow:auto}
+}
 </style>
 </head>
 <body>
 
-<div class="header">
-  <h1>ESP32 RAIN MONITOR</h1>
-  <p>PAGASA-INSPIRED LOCAL RAINFALL MONITORING</p>
-</div>
-
-<div id="status" class="status" style="background:#43a047">NORMAL</div>
-
-<div class="card">
-  <div class="label">RAINFALL CLASSIFICATION</div>
-  <div id="classification" class="classification" style="background:#66bb6a">LIGHT RAIN</div>
-</div>
-
-<div class="card">
-  <div class="label">CURRENT RAIN ACTIVITY</div>
-  <div id="activity" class="activity">WAITING FOR RAIN</div>
-</div>
-
-<div class="card">
-  <div class="label">RAIN DURATION</div>
-  <div id="duration" class="value">0 sec</div>
-</div>
-
-<div class="card">
-  <div class="label">RAINFALL INTENSITY</div>
-  <div id="intensity" class="value">0.00 mm/hr</div>
-</div>
-
-<div class="card">
-  <div class="label">TOTAL RAINFALL</div>
-  <div id="rain" class="value">0.00 mm</div>
-</div>
-
-<div class="card">
-  <div class="label">TIPPING BUCKET COUNT</div>
-  <div id="tips" class="value">0</div>
-</div>
-
-<div class="card">
-  <div class="label">WATER LEVEL</div>
-  <div id="water" class="value">-- cm</div>
-</div>
-
-<div class="card">
-  <div class="label">NO-RAIN RESET COUNTDOWN</div>
-  <div class="countdown"><span id="countdown">60</span></div>
-  <p>Every new bucket tip restarts the timer.</p>
-</div>
-
-<div class="card">
-  <div class="label">TOMORROW'S RAIN FORECAST</div>
-  <div id="fc-class" class="classification" style="background:#9e9e9e">LOADING...</div>
-  <div id="fc-detail" class="info" style="margin-top:8px">Fetching forecast...</div>
-</div>
-
-<div class="card">
-  <div class="label">FLOOD OUTLOOK</div>
-  <div id="flood-class" class="classification" style="background:#9e9e9e">--</div>
-  <div id="flood-detail" class="info" style="margin-top:8px">Waiting for forecast...</div>
-</div>
-
-<div class="card">
-  <div class="label">WATER LEVEL TREND</div>
-  <div id="trend" class="value">--</div>
-  <div id="trend-detail" class="info">Collecting data...</div>
-</div>
-
-<div class="card">
-  <div class="label">RAINFALL GUIDE</div>
-  <div class="info">
-    0-100 tips = Light Rain<br>
-    101-150 tips = Moderate Rain<br>
-    151-200 tips = Heavy Rain<br>
-    201+ tips = Intense Heavy Rain
+<header class="topbar">
+  <div class="brand">
+    <b>ESP32 Rain Monitor</b>
+    <small>PAGASA-inspired local rainfall monitoring</small>
   </div>
-</div>
+  <button class="sos-btn" onclick="openHelp()">Emergency hotlines</button>
+</header>
 
-<div class="card">
-  <div class="info">
-    Device: <span id="device">--</span><br>
-    WiFi Signal: <span id="rssi">--</span><br>
-    Last Update: <span id="lastUpdate">waiting for data...</span>
-  </div>
-</div>
+<main>
 
-<div class="footer">Local sensor monitoring system - PAGASA-inspired</div>
+  <!-- ===================== HOME ===================== -->
+  <section class="page active" id="page-home">
+
+    <div class="hero" id="hero" data-state="loading">
+      <div class="hero-fx" aria-hidden="true"></div>
+      <div class="hero-top">
+        <span id="warnChip" class="chip">NORMAL</span>
+        <span id="live" class="live"><i></i><span id="liveText">Connecting...</span></span>
+      </div>
+      <div class="hero-core">
+        <div id="heroIcon" class="hero-icon"></div>
+        <h1 id="heroTitle">Connecting...</h1>
+        <p id="heroSub" class="hero-sub">Waiting for the first reading from the rain gauge.</p>
+        <div class="hero-stats">
+          <div><span class="k">Rain, last hour</span><b id="stRain1h">--</b></div>
+          <div><span class="k">Intensity</span><b id="stIntensity">--</b></div>
+          <div><span class="k">Water level</span><b id="stWater">--</b></div>
+        </div>
+      </div>
+      <button id="heroHelp" class="hero-help" onclick="openHelp()" hidden>Emergency hotlines</button>
+    </div>
+
+    <div id="notice" class="notice" hidden></div>
+
+    <article class="card predict">
+      <div class="card-head">
+        <h2>Flood prediction</h2>
+        <span id="outlookChip" class="chip">--</span>
+      </div>
+      <div class="window">
+        <div class="wcell"><span class="k">Rain starts</span><b id="wStart">--</b><small id="wStartDay">&nbsp;</small></div>
+        <div class="wline"></div>
+        <div class="wcell"><span class="k">Rain ends</span><b id="wEnd">--</b><small id="wEndDay">&nbsp;</small></div>
+      </div>
+      <p id="wSummary" class="wsum">Loading forecast...</p>
+      <div class="rows">
+        <div class="row"><span>Expected total</span><b id="wTotal">--</b></div>
+        <div class="row"><span>Heaviest hour</span><b id="wPeak">--</b></div>
+        <div class="row"><span>Chance of rain</span><b id="wChance">--</b></div>
+        <div class="row"><span>Water level trend</span><b id="trend">--</b></div>
+      </div>
+      <p id="trendDetail" class="fine"></p>
+      <p id="tomorrow" class="fine"></p>
+      <p class="fine">Local estimate from forecast rainfall and the water level sensor. It is not an official PAGASA warning.</p>
+    </article>
+
+  </section>
+
+  <!-- ===================== DETAILS ===================== -->
+  <section class="page" id="page-info">
+    <h2 class="page-title">Details</h2>
+
+    <div class="tiles">
+      <div class="tile"><span class="k">Total rainfall (this rain)</span><b id="tTotal">--</b></div>
+      <div class="tile"><span class="k">Rain duration</span><b id="tDuration">--</b></div>
+      <div class="tile"><span class="k">No-rain reset in</span><b id="tCountdown">--</b></div>
+      <div class="tile"><span class="k">Rain activity</span><b id="tActivity" class="sm">--</b></div>
+      <div class="tile"><span class="k">Bucket tips</span><b id="tTips">--</b></div>
+      <div class="tile"><span class="k">WiFi signal</span><b id="tRssi">--</b></div>
+    </div>
+
+    <article class="card guide">
+      <div class="card-head"><h2>What the warnings mean</h2></div>
+      <div class="g"><i class="dot" style="background:var(--yellow)"></i><div><b>Yellow: 7.5 to 15 mm in 1 hour</b><span>Heavy rain. Flooding is possible. Monitor the weather condition.</span></div></div>
+      <div class="g"><i class="dot" style="background:var(--orange)"></i><div><b>Orange: 15 to 30 mm in 1 hour</b><span>Intense rain. Flooding is threatening. Be alert for possible evacuation.</span></div></div>
+      <div class="g"><i class="dot" style="background:var(--red)"></i><div><b>Red: more than 30 mm in 1 hour</b><span>Serious flooding expected in low-lying areas. Evacuation.</span></div></div>
+      <p class="fine">Levels follow PAGASA's rainfall warning chart. This gauge also raises the level from its water level sensor.</p>
+    </article>
+
+    <p class="fine credits">
+      ESP32 DIY Smart Rain Gauge. PAGASA-inspired local rainfall monitoring.<br>
+      Project by <span id="team"></span>.<br>
+      Weather forecast data by <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo.com</a> (CC BY 4.0).<br>
+      Warnings come from a local sensor and are estimates, not official PAGASA warnings. For official advisories visit <a href="https://www.pagasa.dost.gov.ph/" target="_blank" rel="noopener">PAGASA</a>.<br>
+      Icons by Feather (MIT license).
+    </p>
+  </section>
+
+  <!-- ===================== EMERGENCY ===================== -->
+  <section class="page" id="page-help">
+    <div class="help-panel">
+      <div class="help-head"><h2>Emergency hotlines</h2><button class="x" onclick="closeHelp()" aria-label="Close">&times;</button></div>
+      <p class="muted" style="margin:6px 0 0;font-size:14px">Tap a number to call.</p>
+      <a class="call-primary" id="callPrimary" href="#" hidden></a>
+      <div id="hotlineList"></div>
+      <p class="fine">Numbers are set by the project team and can change. Also save your own barangay and city hall hotlines.</p>
+    </div>
+  </section>
+
+</main>
+
+<nav class="tabbar" aria-label="Sections">
+  <button class="tab active" data-tab="home" onclick="showTab('home')">
+    <svg viewBox="0 0 24 24"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>Home
+  </button>
+  <button class="tab" data-tab="info" onclick="showTab('info')">
+    <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>Details
+  </button>
+  <button class="tab sos" data-tab="help" onclick="openHelp()">
+    <svg viewBox="0 0 24 24"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>Emergency
+  </button>
+</nav>
 
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 <script>
 // ============================================================
-// SUPABASE SETTINGS  (Settings -> API in your Supabase project)
-// Use the ANON key only. Never put the service_role key here.
+// CONFIG: fill these in
 // ============================================================
-const SUPABASE_URL  = "https://zyzcllhenxikblfldael.supabase.co";
-const SUPABASE_KEY  = "sb_publishable_WGrYt8gdleNt5HgqvxU_tw_HPpayowK";
-const DEVICE_ID     = "RAIN001";
+const SUPABASE_URL = "https://zyzcllhenxikblfldael.supabase.co";   // base URL only
+const SUPABASE_KEY = "sb_publishable_WGrYt8gdleNt5HgqvxU_tw_HPpayowK";                      // anon / publishable key only
+const DEVICE_ID    = "RAIN001";
 
-// Same local thresholds as the ESP32 sketch
-const ALERT_INTERVAL = 200;
-const FLOOD_RISK_TIPS = 600;
-const WATER_ALERT_CM = 30;   // keep the same as the ESP32 sketch
-const WATER_FLOOD_CM = 60;
+const LAT = 15.007813;    // location of your rain gauge (Makati City by default)
+const LON = 120.703438;
 
+// Keep these the same as the ESP32 sketch
+const WATER_ALERT_CM  = 20;   // yellow
+const WATER_ORANGE_CM = 40;   // orange
+const WATER_FLOOD_CM  = 60;   // red
+
+const STALE_SECONDS = 120;    // show a notice if the sensor has been silent this long
+const TEAM_NAME = "IT26 / Pampanga State University";
+
+// Hotline numbers live in the Supabase "hotlines" table (see supabase_hotlines.sql).
+// Edit them in Table Editor. These placeholders show until the table has rows.
+const HOTLINES_CACHE_KEY = 'rain_hotlines_v1';
+const PLACEHOLDER_HOTLINES = [
+  { name: "National Emergency Hotline", note: "Placeholder: set the real number in the hotlines table", numbers: "000-0000", is_primary: true },
+  { name: "Barangay Hall", note: "Placeholder", numbers: "000-0000" },
+  { name: "City Disaster Risk Reduction Office", note: "Placeholder", numbers: "000-0000" },
+  { name: "Fire Department", note: "Placeholder", numbers: "000-0000" },
+  { name: "Police", note: "Placeholder", numbers: "000-0000" },
+  { name: "Red Cross", note: "Placeholder", numbers: "000-0000" }
+];
+
+// ============================================================
+// SETUP
+// ============================================================
+const $ = id => document.getElementById(id);
 const db = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-let latest = null;       // newest row from Supabase
-let receivedAt = 0;      // when this browser received it (for the countdown)
+let latest = null;     // newest row from Supabase
+let forecast = null;   // parsed Open-Meteo data
+let trendInfo = null;
 
-function rainClass(tips){
-  if (tips > 200) return {text:"INTENSE HEAVY RAIN", color:"#8e24aa"};
-  if (tips > 150) return {text:"HEAVY RAIN",         color:"#e53935"};
-  if (tips > 100) return {text:"MODERATE RAIN",      color:"#fbc02d"};
-  return               {text:"LIGHT RAIN",           color:"#66bb6a"};
+const svg = inner => '<svg viewBox="0 0 24 24" aria-hidden="true">' + inner + '</svg>';
+const ICONS = {
+  cloud: svg('<path d="M18 10h-1.26A8 8 0 1 0 9 20h9a5 5 0 0 0 0-10z"/>'),
+  sun: svg('<circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/>'),
+  rain: svg('<line x1="16" y1="13" x2="16" y2="21"/><line x1="8" y1="13" x2="8" y2="21"/><line x1="12" y1="15" x2="12" y2="23"/><path d="M20 16.58A5 5 0 0 0 18 7h-1.26A8 8 0 1 0 4 15.25"/>'),
+  storm: svg('<path d="M19 16.9A5 5 0 0 0 18 7h-1.26a8 8 0 1 0-11.62 9"/><polyline points="13 11 9 17 15 17 11 23"/>'),
+  flood: svg('<path d="M2 8c2 0 2-2 4-2s2 2 4 2 2-2 4-2 2 2 4 2 2-2 4-2"/><path d="M2 13c2 0 2-2 4-2s2 2 4 2 2-2 4-2 2 2 4 2 2-2 4-2"/><path d="M2 18c2 0 2-2 4-2s2 2 4 2 2-2 4-2 2 2 4 2 2-2 4-2"/>')
+};
+const HERO_TITLE = { loading: "Connecting...", clear: "Clear", rainy: "Rainy", heavy: "Really rainy", flooding: "Flooding" };
+const HERO_ICON  = { loading: ICONS.cloud, clear: ICONS.sun, rainy: ICONS.rain, heavy: ICONS.storm, flooding: ICONS.flood };
+
+// ============================================================
+// TABS (phone) / EMERGENCY PANEL
+// ============================================================
+const isDesktop = () => window.matchMedia('(min-width: 900px)').matches;
+
+function showTab(name){
+  document.querySelectorAll('.page').forEach(p => p.classList.toggle('active', p.id === 'page-' + name));
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  window.scrollTo(0, 0);
+}
+function openHelp(){
+  if (isDesktop()) document.body.classList.add('help-open');
+  else showTab('help');
+}
+function closeHelp(){
+  if (isDesktop()) document.body.classList.remove('help-open');
+  else showTab('home');
+}
+document.addEventListener('keydown', e => { if (e.key === 'Escape') document.body.classList.remove('help-open'); });
+document.addEventListener('click', e => { if (e.target.id === 'page-help') document.body.classList.remove('help-open'); });
+
+const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const splitNumbers = s => String(s || '').split(',').map(x => x.trim()).filter(Boolean);
+const isPlaceholderNumber = n => !/[1-9]/.test(n);          // 000-0000 style = not set yet
+const telHref = n => 'tel:' + n.replace(/[^\d+]/g, '');
+
+function numberPill(n){
+  return isPlaceholderNumber(n)
+    ? '<span class="ph">' + esc(n) + '</span>'
+    : '<a href="' + telHref(n) + '">' + esc(n) + '</a>';
 }
 
-function floodStatus(tips, water){
-  const w = (water === null || water === undefined) ? 0 : water;
-  if (tips >= FLOOD_RISK_TIPS || w >= WATER_FLOOD_CM) return {text:"RISK OF FLOOD", color:"#e53935"};
-  if (tips >= ALERT_INTERVAL  || w >= WATER_ALERT_CM) return {text:"RAIN ALERT",    color:"#fbc02d"};
-  return                                                     {text:"NORMAL",        color:"#43a047"};
+function renderHotlines(list){
+  const primary = list.find(x => x.is_primary) || null;
+  const rest = list.filter(x => x !== primary);
+  const btn = $('callPrimary');
+
+  if (primary){
+    const nums = splitNumbers(primary.numbers);
+    const first = nums[0] || '';
+    if (!first || isPlaceholderNumber(first)){
+      btn.removeAttribute('href');
+      btn.classList.add('off');
+      btn.innerHTML = 'Emergency number not set yet<small>' + esc(primary.name) + '</small>';
+    } else {
+      btn.href = telHref(first);
+      btn.classList.remove('off');
+      btn.innerHTML = 'Call ' + esc(first) + '<small>' + esc(primary.name) + '</small>';
+    }
+    btn.hidden = false;
+    if (nums.length > 1) rest.unshift({ name: primary.name, note: primary.note, numbers: nums.slice(1).join(', ') });
+  } else {
+    btn.hidden = true;
+  }
+
+  $('hotlineList').innerHTML = rest.map(x =>
+    '<div class="hl"><b>' + esc(x.name) + '</b>' + (x.note ? '<small>' + esc(x.note) + '</small>' : '') +
+    '<div class="nums">' + splitNumbers(x.numbers).map(numberPill).join('') + '</div></div>'
+  ).join('');
+}
+
+function initialHotlines(){
+  try {
+    const c = JSON.parse(localStorage.getItem(HOTLINES_CACHE_KEY));
+    if (Array.isArray(c) && c.length) return c;
+  } catch (e) {}
+  return PLACEHOLDER_HOTLINES;
+}
+
+async function loadHotlines(){
+  try {
+    const { data, error } = await db.from('hotlines')
+      .select('*')
+      .eq('active', true)
+      .order('sort_order', { ascending: true })
+      .order('id', { ascending: true });
+    if (error) return;                                   // keep what is already shown
+    if (!data || !data.length){
+      try { localStorage.removeItem(HOTLINES_CACHE_KEY); } catch (e) {}
+      renderHotlines(PLACEHOLDER_HOTLINES);
+      return;
+    }
+    renderHotlines(data);
+    try { localStorage.setItem(HOTLINES_CACHE_KEY, JSON.stringify(data)); } catch (e) {}   // still shows if the phone is offline later
+  } catch (e) { console.error(e); }
+}
+
+// ============================================================
+// HELPERS
+// ============================================================
+function fmtAgo(s){
+  if (s < 60) return s + ' s ago';
+  if (s < 3600) return Math.floor(s / 60) + ' min ago';
+  return Math.floor(s / 3600) + ' h ago';
+}
+function fmtDur(s){
+  s = Math.max(0, Math.floor(s));
+  if (s < 60) return s + ' s';
+  const m = Math.floor(s / 60);
+  if (m < 60) return m + ' min ' + ('0' + (s % 60)).slice(-2) + ' s';
+  return Math.floor(m / 60) + ' h ' + ('0' + (m % 60)).slice(-2) + ' min';
+}
+const manilaDay = ts => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Manila' }).format(new Date(ts));
+function dayLabel(ts){
+  const d = manilaDay(ts);
+  if (d === manilaDay(Date.now())) return 'Today';
+  if (d === manilaDay(Date.now() + 86400000)) return 'Tomorrow';
+  return new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Manila', weekday: 'long' }).format(new Date(ts));
+}
+const timeLabel = ts => new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Manila', hour: 'numeric', minute: '2-digit', hour12: true }).format(new Date(ts));
+const hourLabel = ts => new Intl.DateTimeFormat('en-US', { timeZone: 'Asia/Manila', hour: 'numeric', hour12: true }).format(new Date(ts));
+
+// ============================================================
+// HERO PANEL (clear / rainy / really rainy / flooding)
+// ============================================================
+function heroState(){
+  if (!latest) return 'loading';
+  const lvl = latest.alert_level || 0;
+  const w = latest.water_level_cm;
+  if (lvl >= 3 || (w != null && w >= WATER_ORANGE_CM)) return 'flooding';
+  const raining = latest.rain_activity === 'RAIN DETECTED';
+  const heavyNow = (latest.rain_1h_mm || 0) >= 7.5 || (latest.rainfall_intensity || 0) >= 7.5;
+  if (raining && (heavyNow || lvl >= 1)) return 'heavy';
+  if (raining) return 'rainy';
+  return 'clear';
+}
+
+function heroSub(state){
+  const r1 = Number(latest.rain_1h_mm || 0).toFixed(1);
+  const w = latest.water_level_cm;
+  const lvl = latest.alert_level || 0;
+  if (state === 'flooding'){
+    return lvl >= 3
+      ? 'Serious flooding is expected in low-lying areas. Move to higher ground and follow local officials.'
+      : 'The water level is high (' + Number(w).toFixed(0) + ' cm). Flooding is threatening.';
+  }
+  if (state === 'heavy')  return r1 + ' mm of rain in the last hour. Flooding is ' + (lvl >= 2 ? 'threatening' : 'possible') + '. Stay alert.';
+  if (state === 'rainy')  return 'Rain is falling. ' + r1 + ' mm in the last hour.';
+  return (w != null && w >= WATER_ALERT_CM)
+    ? 'No rain right now, but the water level is elevated (' + Number(w).toFixed(0) + ' cm).'
+    : 'No rain detected right now.';
+}
+
+function renderHero(age, stale){
+  const state = heroState();
+  const lvl = latest ? (latest.alert_level || 0) : 0;
+  const hero = $('hero');
+
+  hero.dataset.state = state;
+  hero.classList.toggle('stale', stale);
+  $('heroIcon').innerHTML = HERO_ICON[state];
+  $('heroTitle').textContent = HERO_TITLE[state];
+  if (!latest) return;
+
+  $('heroSub').textContent = heroSub(state);
+
+  const chip = $('warnChip');
+  const names = ['NORMAL', 'YELLOW WARNING', 'ORANGE WARNING', 'RED WARNING'];
+  chip.textContent = names[Math.min(3, lvl)];
+  chip.className = 'chip' + (lvl >= 1 ? ' lv' + Math.min(3, lvl) : '');
+
+  $('stRain1h').textContent = Number(latest.rain_1h_mm || 0).toFixed(1) + ' mm';
+  $('stIntensity').textContent = Number(latest.rainfall_intensity || 0).toFixed(1) + ' mm/hr';
+  $('stWater').textContent = latest.water_level_cm == null ? '-- cm' : Number(latest.water_level_cm).toFixed(0) + ' cm';
+
+  $('heroHelp').hidden = !(state === 'flooding' || lvl >= 2);
+
+  $('live').classList.toggle('stale', stale);
+  $('liveText').textContent = (stale ? 'No update ' : 'Live, updated ') + fmtAgo(age);
+
+  const notice = $('notice');
+  notice.hidden = !stale;
+  if (stale) notice.textContent = 'No update from the rain gauge for ' + fmtAgo(age).replace(' ago', '') +
+    '. These readings may be out of date. Check official advisories if it is raining.';
+}
+
+// ============================================================
+// DETAILS TAB
+// ============================================================
+function renderDetails(age){
+  const raining = latest.rain_activity === 'RAIN DETECTED';
+  const dur = (latest.rain_duration_seconds || 0) + (raining ? age : 0);
+  let cd = latest.no_rain_countdown;
+  if (raining) cd = Math.max(0, cd - age);
+
+  $('tTotal').textContent = Number(latest.rainfall_mm || 0).toFixed(2) + ' mm';
+  $('tDuration').textContent = fmtDur(dur);
+  $('tCountdown').textContent = cd + ' s';
+  $('tActivity').textContent = raining ? 'Raining' : (latest.rain_activity === 'NO RAIN DETECTED' ? 'Rain stopped' : 'Waiting for rain');
+  $('tTips').textContent = latest.tip_count;
+  $('tRssi').textContent = latest.wifi_rssi == null ? '--' : latest.wifi_rssi + ' dBm';
 }
 
 function render(){
   if (!latest) return;
-
-  const tips = latest.tip_count;
-  const rc = rainClass(tips);
-  const fs = floodStatus(tips, latest.water_level_cm);
-
-  document.getElementById('status').innerHTML = fs.text;
-  document.getElementById('status').style.background = fs.color;
-
-  document.getElementById('classification').innerHTML = rc.text;
-  document.getElementById('classification').style.background = rc.color;
-
-  document.getElementById('tips').innerHTML = tips;
-  document.getElementById('water').innerHTML =
-    (latest.water_level_cm == null) ? '-- cm' : latest.water_level_cm.toFixed(1) + ' cm';
-  document.getElementById('rain').innerHTML = latest.rainfall_mm.toFixed(2) + ' mm';
-  document.getElementById('intensity').innerHTML = latest.rainfall_intensity.toFixed(2) + ' mm/hr';
-  document.getElementById('activity').innerHTML = latest.rain_activity || 'WAITING FOR RAIN';
-
-  // Seconds since the ESP32 sent this reading (uses the saved timestamp,
-  // so a page refresh does not restart the countdown)
   const age = Math.max(0, Math.floor((Date.now() - new Date(latest.created_at).getTime()) / 1000));
-  const raining = latest.rain_activity === 'RAIN DETECTED';
-
-  // Duration and countdown keep moving between uploads while rain is detected
-  const dur = (latest.rain_duration_seconds || 0) + (raining ? age : 0);
-  document.getElementById('duration').innerHTML = dur + ' sec';
-
-  let cd = latest.no_rain_countdown;
-  if (raining) {
-    cd = Math.max(0, cd - age);
-  }
-  document.getElementById('countdown').innerHTML = cd + ' SEC';
-
-  document.getElementById('device').innerHTML = latest.device_id;
-  document.getElementById('rssi').innerHTML = latest.wifi_rssi + ' dBm';
-  document.getElementById('lastUpdate').innerHTML =
-    new Date(latest.created_at).toLocaleTimeString();
-
-  renderForecast();
+  const stale = age > STALE_SECONDS;
+  renderHero(age, stale);
+  renderDetails(age);
+  renderPredict();
 }
 
-function setLatest(row){
-  latest = row;
-  receivedAt = Date.now();
-  render();
-}
-
-// 1) Load the newest reading when the page opens
-db.from('rain_readings')
-  .select('*')
-  .eq('device_id', DEVICE_ID)
-  .order('created_at', { ascending: false })
-  .limit(1)
-  .then(({ data, error }) => {
-    if (error) { console.error(error); return; }
-    if (data && data[0]) setLatest(data[0]);
-  });
-
-// 2) Live updates: Supabase pushes each new row the moment the ESP32 inserts it
-db.channel('rain-live')
-  .on('postgres_changes',
-      { event: 'INSERT', schema: 'public', table: 'rain_readings',
-        filter: 'device_id=eq.' + DEVICE_ID },
-      payload => setLatest(payload.new))
-  .subscribe();
-
 // ============================================================
-// FORECAST (Open-Meteo, free, no key) + FLOOD OUTLOOK + WATER TREND
+// FLOOD PREDICTION CARD (Open-Meteo forecast + water level trend)
 // ============================================================
-const LAT = 15.007813;   // Makati City: change to your rain gauge location
-const LON = 120.703438;
-
-let forecast = null;
-
 async function loadForecast(){
   try {
-    const url = "https://api.open-meteo.com/v1/forecast?latitude=" + LAT + "&longitude=" + LON +
-      "&daily=precipitation_sum,precipitation_probability_max&hourly=precipitation" +
-      "&timezone=Asia%2FManila&forecast_days=3";
-    const res = await fetch(url);
-    const d = await res.json();
+    const url = 'https://api.open-meteo.com/v1/forecast?latitude=' + LAT + '&longitude=' + LON +
+      '&hourly=precipitation,precipitation_probability&daily=precipitation_sum,precipitation_probability_max' +
+      '&timezone=Asia%2FManila&timeformat=unixtime&forecast_days=3';
+    const d = await (await fetch(url)).json();
 
-    const day = d.daily.time[1];   // index 0 = today, 1 = tomorrow
-    const chance = d.daily.precipitation_probability_max[1];
-    const mm = d.daily.precipitation_sum[1];
-    let maxHour = 0;
-    d.hourly.time.forEach((t, i) => {
-      if (t.startsWith(day)) maxHour = Math.max(maxHour, d.hourly.precipitation[i] || 0);
-    });
+    const nowSec = Date.now() / 1000;
+    const times = d.hourly.time, pr = d.hourly.precipitation, pp = d.hourly.precipitation_probability;
 
-    forecast = { chance: chance == null ? 0 : chance, mm: mm || 0, maxHour: maxHour };
-    renderForecast();
+    // Open-Meteo hourly rain is the total of the PRECEDING hour, so an entry at time t covers t-1h to t
+    let i0 = times.findIndex(t => t > nowSec);
+    if (i0 < 0) i0 = times.length;
+    const end = Math.min(times.length, i0 + 48);
+    const isRain = i => (pr[i] || 0) >= 0.3 && (pp[i] == null || pp[i] >= 40);
+
+    let s = -1;
+    for (let i = i0; i < end; i++){ if (isRain(i)) { s = i; break; } }
+
+    let maxChance = 0;
+    for (let i = i0; i < end; i++) maxChance = Math.max(maxChance, pp[i] || 0);
+
+    if (s < 0){
+      forecast = { none: true, chance: maxChance, tomorrowChance: d.daily.precipitation_probability_max[1], tomorrowMm: d.daily.precipitation_sum[1] };
+    } else {
+      let e = s, i = s + 1;
+      while (i < end && i <= e + 2){ if (isRain(i)) e = i; i++; }   // allow a 1-hour dry gap
+
+      let total = 0, peak = 0, peakIdx = s, chance = 0;
+      for (let j = s; j <= e; j++){
+        total += pr[j] || 0;
+        if ((pr[j] || 0) > peak){ peak = pr[j]; peakIdx = j; }
+        chance = Math.max(chance, pp[j] || 0);
+      }
+      forecast = {
+        none: false, total: total, peak: peak, chance: chance,
+        startTs: (times[s] - 3600) * 1000, endTs: times[e] * 1000,
+        peakFrom: (times[peakIdx] - 3600) * 1000, peakTo: times[peakIdx] * 1000,
+        tomorrowChance: d.daily.precipitation_probability_max[1], tomorrowMm: d.daily.precipitation_sum[1]
+      };
+    }
+    renderPredict();
   } catch (e) {
     console.error(e);
-    document.getElementById('fc-detail').innerHTML = "Forecast unavailable right now.";
+    $('wSummary').textContent = 'Forecast unavailable right now.';
   }
 }
 
-function renderForecast(){
-  if (!forecast) return;
-  const f = forecast;
+function renderPredict(){
+  if (forecast){
+    const f = forecast;
+    const wet = latest && latest.water_level_cm != null && latest.water_level_cm >= WATER_ALERT_CM;
 
-  let fc;
-  if (f.chance >= 60)      fc = {text:"RAIN LIKELY",        color:"#e53935"};
-  else if (f.chance >= 30) fc = {text:"RAIN POSSIBLE",      color:"#fbc02d"};
-  else                     fc = {text:"LOW CHANCE OF RAIN", color:"#66bb6a"};
+    let lvl = 0;
+    if (!f.none) lvl = f.peak > 30 ? 3 : f.peak >= 15 ? 2 : f.peak >= 7.5 ? 1 : 0;
+    if (wet && !f.none && lvl < 1) lvl = 1;
 
-  document.getElementById('fc-class').innerHTML = fc.text;
-  document.getElementById('fc-class').style.background = fc.color;
-  document.getElementById('fc-detail').innerHTML =
-    "Chance: " + f.chance + "%<br>Expected: " + f.mm.toFixed(1) +
-    " mm<br>Heaviest hour: " + f.maxHour.toFixed(1) + " mm/hr";
+    const labels = ['LOW RISK', 'YELLOW POSSIBLE', 'ORANGE POSSIBLE', 'RED POSSIBLE'];
+    $('outlookChip').className = 'chip lv' + lvl;
+    $('outlookChip').textContent = labels[lvl];
 
-  // Local flood outlook: tomorrow's rain, raised if the water is already high
-  let lvl = 0;
-  if (f.mm >= 50 || f.maxHour >= 30) lvl = 2;
-  else if (f.mm >= 20 || f.maxHour >= 15) lvl = 1;
+    if (f.none){
+      $('wStart').textContent = '--'; $('wStartDay').innerHTML = '&nbsp;';
+      $('wEnd').textContent = '--';   $('wEndDay').innerHTML = '&nbsp;';
+      $('wSummary').textContent = 'No significant rain expected in the next 48 hours.';
+      $('wTotal').textContent = '0 mm';
+      $('wPeak').textContent = '--';
+    } else {
+      const now = Date.now();
+      const started = f.startTs <= now;
+      $('wStart').textContent = started ? 'Now' : timeLabel(f.startTs);
+      $('wStartDay').innerHTML = started ? 'already in the forecast' : dayLabel(f.startTs);
+      $('wEnd').textContent = timeLabel(f.endTs);
+      $('wEndDay').innerHTML = dayLabel(f.endTs);
+      const hrs = Math.max(1, Math.round((f.endTs - Math.max(f.startTs, now)) / 3600000));
+      $('wSummary').textContent = 'Next rain is expected to last about ' + hrs + (hrs === 1 ? ' hour.' : ' hours.') +
+        (wet ? ' The water level is already elevated.' : '');
+      $('wTotal').textContent = 'about ' + f.total.toFixed(1) + ' mm';
+      $('wPeak').textContent = f.peak.toFixed(1) + ' mm/hr, ' + hourLabel(f.peakFrom) + ' to ' + hourLabel(f.peakTo);
+    }
+    $('wChance').textContent = Math.round(f.chance) + '%';
+    $('tomorrow').textContent = 'Tomorrow overall: ' + Math.round(f.tomorrowChance || 0) + '% chance, about ' + Number(f.tomorrowMm || 0).toFixed(1) + ' mm.';
+  }
 
-  const wet = latest && latest.water_level_cm != null && latest.water_level_cm >= WATER_ALERT_CM;
-  if (wet && f.chance >= 50 && lvl < 1) lvl = 1;
-
-  const labels = ["LOW FLOOD RISK", "FLOOD WATCH", "HIGH FLOOD RISK"];
-  const colors = ["#66bb6a", "#fbc02d", "#e53935"];
-  document.getElementById('flood-class').innerHTML = labels[lvl];
-  document.getElementById('flood-class').style.background = colors[lvl];
-  document.getElementById('flood-detail').innerHTML =
-    (wet ? "Water level is already elevated.<br>" : "") +
-    "Local estimate from forecast rainfall, not an official PAGASA warning.";
+  if (trendInfo){
+    $('trend').textContent = trendInfo.label;
+    $('trendDetail').textContent = trendInfo.detail;
+  }
 }
 
 // Water level trend: straight-line fit over the last 30 minutes
 async function loadTrend(){
-  const el = document.getElementById('trend');
-  const detail = document.getElementById('trend-detail');
   try {
     const since = new Date(Date.now() - 30 * 60 * 1000).toISOString();
     const { data, error } = await db.from('rain_readings')
@@ -288,17 +628,12 @@ async function loadTrend(){
       .not('water_level_cm', 'is', null)
       .order('created_at', { ascending: true });
 
-    if (error || !data || data.length < 3) {
-      el.innerHTML = "--"; detail.innerHTML = "Collecting data..."; return;
-    }
+    if (error || !data || data.length < 3){ trendInfo = { label: '--', detail: 'Water level trend: collecting data...' }; renderPredict(); return; }
 
     const t0 = new Date(data[0].created_at).getTime();
-    const xs = data.map(r => (new Date(r.created_at).getTime() - t0) / 60000); // minutes
+    const xs = data.map(r => (new Date(r.created_at).getTime() - t0) / 60000);
     const ys = data.map(r => r.water_level_cm);
-
-    if (xs[xs.length - 1] < 5) {
-      el.innerHTML = "--"; detail.innerHTML = "Collecting data..."; return;
-    }
+    if (xs[xs.length - 1] < 5){ trendInfo = { label: '--', detail: 'Water level trend: collecting data...' }; renderPredict(); return; }
 
     const n = xs.length;
     const sx = xs.reduce((a, b) => a + b, 0);
@@ -308,35 +643,78 @@ async function loadTrend(){
     const slope = (n * sxy - sx * sy) / (n * sxx - sx * sx);   // cm per minute
     const current = ys[ys.length - 1];
 
-    if (Math.abs(slope) < 0.1) {
-      el.innerHTML = "STEADY";
-      detail.innerHTML = "Water level is holding at " + current.toFixed(1) + " cm.";
-    } else if (slope > 0) {
-      el.innerHTML = "RISING";
-      let msg = "+" + slope.toFixed(2) + " cm/min.";
-      if (current < WATER_FLOOD_CM) {
+    if (Math.abs(slope) < 0.1){
+      trendInfo = { label: 'Steady', detail: 'Water level is holding at ' + current.toFixed(1) + ' cm.' };
+    } else if (slope > 0){
+      let msg = 'Rising ' + slope.toFixed(2) + ' cm/min.';
+      if (current < WATER_FLOOD_CM){
         const eta = (WATER_FLOOD_CM - current) / slope;
         msg += eta <= 180
-          ? "<br>About " + Math.round(eta) + " min to reach " + WATER_FLOOD_CM + " cm at this rate."
-          : "<br>Flood level not expected soon at this rate.";
+          ? ' About ' + Math.round(eta) + ' min to reach ' + WATER_FLOOD_CM + ' cm at this rate.'
+          : ' Flood level not expected soon at this rate.';
       }
-      detail.innerHTML = msg;
+      trendInfo = { label: 'Rising', detail: msg };
     } else {
-      el.innerHTML = "FALLING";
-      detail.innerHTML = slope.toFixed(2) + " cm/min.";
+      trendInfo = { label: 'Falling', detail: 'Falling ' + Math.abs(slope).toFixed(2) + ' cm/min.' };
     }
+    renderPredict();
   } catch (e) {
     console.error(e);
   }
 }
 
+// ============================================================
+// LIVE DATA FROM SUPABASE
+// ============================================================
+function setLatest(row){
+  if (latest && new Date(row.created_at) < new Date(latest.created_at)) return;   // ignore older rows
+  latest = row;
+  render();
+}
+
+async function fetchLatest(){
+  try {
+    const { data, error } = await db.from('rain_readings')
+      .select('*')
+      .eq('device_id', DEVICE_ID)
+      .order('created_at', { ascending: false })
+      .limit(1);
+    if (error){ console.error(error); return; }
+    if (data && data[0]) setLatest(data[0]);
+  } catch (e) { console.error(e); }
+}
+
+// 1) newest reading on page load, then every 30 s as a safety net
+fetchLatest();
+setInterval(fetchLatest, 30000);
+
+// 2) live: Supabase pushes each new row the moment the ESP32 inserts it
+db.channel('rain-live')
+  .on('postgres_changes',
+      { event: 'INSERT', schema: 'public', table: 'rain_readings', filter: 'device_id=eq.' + DEVICE_ID },
+      payload => setLatest(payload.new))
+  .subscribe();
+
+// 3) refresh when the phone wakes the page up again
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible'){ fetchLatest(); loadTrend(); loadForecast(); loadHotlines(); }
+});
+
+// 4) tick every second (keeps "updated x s ago", the countdown and the duration moving)
+setInterval(render, 1000);
+
+// ============================================================
+// START
+// ============================================================
+$('team').textContent = TEAM_NAME;
+renderHotlines(initialHotlines());
+loadHotlines();
+renderHero(0, false);
 loadForecast();
 setInterval(loadForecast, 30 * 60 * 1000);
 loadTrend();
 setInterval(loadTrend, 60 * 1000);
-
-// 3) Refresh the screen every second (keeps the countdown moving, like the original)
-setInterval(render, 1000);
+setTimeout(() => { if (!latest) $('heroSub').textContent = 'Still waiting for data. Check the rain gauge and its internet connection.'; }, 10000);
 </script>
 </body>
 </html>
