@@ -44,13 +44,7 @@ main{max-width:640px;margin:0 auto}
 .hero[data-state="flooding"]{background:linear-gradient(160deg,#ef5350,#8e1b1b)}
 .hero > :not(.hero-fx){position:relative}
 .hero.stale .hero-core{opacity:.6}
-.hero-fx{position:absolute;inset:0;pointer-events:none;opacity:0;transition:opacity .6s;
-  background-image:linear-gradient(105deg,transparent 0 47%,rgba(255,255,255,.55) 47% 51%,transparent 51% 100%);
-  background-size:22px 38px;animation:fall .7s linear infinite}
-.hero[data-state="rainy"] .hero-fx{opacity:.22}
-.hero[data-state="heavy"] .hero-fx,.hero[data-state="flooding"] .hero-fx{opacity:.4;animation-duration:.45s}
-@keyframes fall{to{background-position:0 38px}}
-@media (prefers-reduced-motion: reduce){.hero-fx{animation:none}}
+.hero-fx{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}
 
 .hero-top{display:flex;align-items:center;justify-content:space-between;gap:10px}
 .live{display:flex;align-items:center;gap:6px;font-size:12px}
@@ -170,7 +164,7 @@ main{max-width:640px;margin:0 auto}
   <section class="page active" id="page-home">
 
     <div class="hero" id="hero" data-state="loading">
-      <div class="hero-fx" aria-hidden="true"></div>
+      <canvas id="rainFx" class="hero-fx" aria-hidden="true"></canvas>
       <div class="hero-top">
         <span id="warnChip" class="chip">NORMAL</span>
         <span id="live" class="live"><i></i><span id="liveText">Connecting...</span></span>
@@ -287,7 +281,7 @@ const WATER_ORANGE_CM = 40;   // orange
 const WATER_FLOOD_CM  = 60;   // red
 
 const STALE_SECONDS = 120;    // show a notice if the sensor has been silent this long
-const TEAM_NAME = "IT26 / Pampanga State University";
+const TEAM_NAME = "Your team / school name";
 
 // Hotline numbers live in the Supabase "hotlines" table (see supabase_hotlines.sql).
 // Edit them in Table Editor. These placeholders show until the table has rows.
@@ -472,6 +466,7 @@ function renderHero(age, stale){
 
   hero.dataset.state = state;
   hero.classList.toggle('stale', stale);
+  setRainMode(state === 'rainy' || state === 'heavy' || state === 'flooding' ? state : 'none');
   $('heroIcon').innerHTML = HERO_ICON[state];
   $('heroTitle').textContent = HERO_TITLE[state];
   if (!latest) return;
@@ -702,6 +697,96 @@ document.addEventListener('visibilitychange', () => {
 
 // 4) tick every second (keeps "updated x s ago", the countdown and the duration moving)
 setInterval(render, 1000);
+
+// ============================================================
+// RAIN EFFECT (falling drops on the hero panel)
+// ============================================================
+const reduceMotion = !!(window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+const SLANT = 0.22;   // how far a drop drifts sideways per pixel it falls
+const RAIN_SETTINGS = {
+  rainy:    { count: 45,  speed: [420, 620],  len: [10, 18], alpha: [0.20, 0.45] },
+  heavy:    { count: 130, speed: [720, 1050], len: [16, 30], alpha: [0.25, 0.60] },
+  flooding: { count: 130, speed: [720, 1050], len: [16, 30], alpha: [0.25, 0.60] }
+};
+const fx = { canvas: null, ctx: null, w: 0, h: 0, drops: [], mode: 'none', raf: 0, last: 0 };
+const rnd = r => r[0] + Math.random() * (r[1] - r[0]);
+
+function fxResize(){
+  const c = fx.canvas;
+  if (!c) return;
+  const r = c.parentElement.getBoundingClientRect();
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  fx.w = r.width; fx.h = r.height;
+  c.width = Math.max(1, Math.round(r.width * dpr));
+  c.height = Math.max(1, Math.round(r.height * dpr));
+  fx.ctx = c.getContext ? c.getContext('2d') : null;
+  if (fx.ctx) fx.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+function newDrop(cfg, anywhere){
+  return {
+    x: Math.random() * (fx.w + 80) - 40,
+    y: anywhere ? Math.random() * fx.h : -Math.random() * 80 - 10,
+    v: rnd(cfg.speed), l: rnd(cfg.len), a: rnd(cfg.alpha)
+  };
+}
+
+function drawWaves(ctx, ts){
+  const t = ts / 1000;
+  for (let k = 0; k < 2; k++){
+    const base = fx.h - 12 - k * 10, amp = 5 + k * 2, wave = 90 + k * 50, phase = t * (1.3 + k * 0.6);
+    ctx.beginPath();
+    ctx.moveTo(0, fx.h);
+    for (let x = 0; x <= fx.w; x += 8) ctx.lineTo(x, base + Math.sin(x / wave * 2 * Math.PI + phase) * amp);
+    ctx.lineTo(fx.w, fx.h);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(255,255,255,' + (0.10 + k * 0.08) + ')';
+    ctx.fill();
+  }
+}
+
+function fxFrame(ts){
+  fx.raf = 0;
+  const cfg = RAIN_SETTINGS[fx.mode];
+  const ctx = fx.ctx;
+  if (!ctx) return;
+  ctx.clearRect(0, 0, fx.w, fx.h);
+  if (!cfg) return;
+
+  const dt = Math.min(0.05, (ts - (fx.last || ts)) / 1000);
+  fx.last = ts;
+
+  ctx.lineWidth = 1.3;
+  ctx.lineCap = 'round';
+  for (const d of fx.drops){
+    d.y += d.v * dt;
+    d.x += d.v * dt * SLANT;
+    if (d.y - d.l > fx.h) Object.assign(d, newDrop(cfg, false));
+    ctx.strokeStyle = 'rgba(255,255,255,' + d.a + ')';
+    ctx.beginPath();
+    ctx.moveTo(d.x, d.y);
+    ctx.lineTo(d.x - d.l * SLANT, d.y - d.l);
+    ctx.stroke();
+  }
+  if (fx.mode === 'flooding') drawWaves(ctx, ts);
+
+  fx.raf = requestAnimationFrame(fxFrame);
+}
+
+function setRainMode(mode){
+  if (fx.mode === mode) return;
+  fx.mode = mode;
+  if (!fx.canvas){
+    fx.canvas = $('rainFx');
+    fxResize();
+    if (typeof ResizeObserver !== 'undefined') new ResizeObserver(fxResize).observe($('hero'));
+    else window.addEventListener('resize', fxResize);
+  }
+  const cfg = RAIN_SETTINGS[mode];
+  fx.drops = (cfg && !reduceMotion) ? Array.from({ length: cfg.count }, () => newDrop(cfg, true)) : [];
+  if (fx.ctx && !cfg) fx.ctx.clearRect(0, 0, fx.w, fx.h);
+  if (cfg && !reduceMotion && fx.ctx && !fx.raf){ fx.last = 0; fx.raf = requestAnimationFrame(fxFrame); }
+}
 
 // ============================================================
 // START
